@@ -1,0 +1,28 @@
+services:
+  importer:
+    image: packferry-importer:0.1.0
+    restart: unless-stopped
+    init: true
+    environment:
+      PACKFERRY_NEXUS_URL: ${PACKFERRY_NEXUS_URL:?Set HTTPS Nexus URL}
+      PACKFERRY_REPOSITORIES_JSON: ${PACKFERRY_REPOSITORIES_JSON:?Set Hosted repository whitelist}
+      PACKFERRY_DATA_DIR: /var/lib/packferry
+      PACKFERRY_MAINTAINERS: ${PACKFERRY_MAINTAINERS:-}
+      PACKFERRY_MAX_BUNDLE_BYTES: ${PACKFERRY_MAX_BUNDLE_BYTES:-5368709120}
+      PACKFERRY_BUNDLE_RETENTION_DAYS: ${PACKFERRY_BUNDLE_RETENTION_DAYS:-30}
+      PACKFERRY_VERIFY_NEXUS_TLS: '1'
+      PACKFERRY_TRUSTED_PROXY_IPS: ${PACKFERRY_TRUSTED_PROXY_IPS:?Set exact proxy source IP seen inside container}
+    volumes:
+      - ./data:/var/lib/packferry
+    ports:
+      - '127.0.0.1:8000:8000'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'

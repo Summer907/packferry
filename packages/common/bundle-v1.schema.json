@@ -1,0 +1,464 @@
+{
+  "$defs": {
+    "Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "filename": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "wheel",
+            "sdist",
+            "npm"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "archive_path": {
+          "title": "Archive Path",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 1,
+          "title": "Size",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "package_node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Package Node Ids",
+          "type": "array"
+        },
+        "integrity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Integrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "filename",
+        "type",
+        "archive_path",
+        "size",
+        "sha256",
+        "source",
+        "package_node_ids"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "Environment": {
+      "additionalProperties": false,
+      "properties": {
+        "environment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Environment Id",
+          "type": "string"
+        },
+        "runtime": {
+          "default": "cpython",
+          "title": "Runtime",
+          "type": "string"
+        },
+        "version": {
+          "default": "3.12",
+          "title": "Version",
+          "type": "string"
+        },
+        "platform": {
+          "default": "win_amd64",
+          "title": "Platform",
+          "type": "string"
+        },
+        "abi": {
+          "default": "cp312",
+          "title": "Abi",
+          "type": "string"
+        },
+        "libc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Libc"
+        }
+      },
+      "required": [
+        "environment_id"
+      ],
+      "title": "Environment",
+      "type": "object"
+    },
+    "Input": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "packages",
+          "enum": [
+            "packages",
+            "project"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "normalized_constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Normalized Constraints",
+          "type": "array"
+        },
+        "resolution_policy": {
+          "default": "fresh",
+          "enum": [
+            "fresh",
+            "reuse"
+          ],
+          "title": "Resolution Policy",
+          "type": "string"
+        },
+        "lock_policy": {
+          "default": "prefer",
+          "enum": [
+            "prefer",
+            "ignore"
+          ],
+          "title": "Lock Policy",
+          "type": "string"
+        },
+        "original_lock_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Lock Fingerprint"
+        }
+      },
+      "title": "Input",
+      "type": "object"
+    },
+    "Package": {
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "minLength": 1,
+          "title": "Node Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "dependencies_known": {
+          "default": true,
+          "title": "Dependencies Known",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "node_id",
+        "name",
+        "version",
+        "source"
+      ],
+      "title": "Package",
+      "type": "object"
+    },
+    "Resolution": {
+      "additionalProperties": false,
+      "properties": {
+        "environment_id": {
+          "title": "Environment Id",
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Nodes",
+          "type": "array"
+        },
+        "selected_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Artifacts",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "dependencies": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Dependencies",
+          "type": "object"
+        },
+        "build_dependencies": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Build Dependencies",
+          "type": "object"
+        }
+      },
+      "required": [
+        "environment_id",
+        "status"
+      ],
+      "title": "Resolution",
+      "type": "object"
+    },
+    "Verification": {
+      "additionalProperties": false,
+      "properties": {
+        "resolution_status": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "FAILED"
+          ],
+          "title": "Resolution Status",
+          "type": "string"
+        },
+        "collection_status": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "FAILED"
+          ],
+          "title": "Collection Status",
+          "type": "string"
+        },
+        "offline_install_status": {
+          "default": "NOT_VERIFIED",
+          "enum": [
+            "NOT_VERIFIED",
+            "VERIFIED",
+            "BLOCKED"
+          ],
+          "title": "Offline Install Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolution_status",
+        "collection_status"
+      ],
+      "title": "Verification",
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "severity": {
+          "default": "warning",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "affected_environment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Environment Ids",
+          "type": "array"
+        },
+        "affected_node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Node Ids",
+          "type": "array"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Warning",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Format Version",
+      "type": "integer"
+    },
+    "bundle_id": {
+      "title": "Bundle Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "ecosystem": {
+      "enum": [
+        "pypi",
+        "npm"
+      ],
+      "title": "Ecosystem",
+      "type": "string"
+    },
+    "generator_version": {
+      "default": "0.1.0",
+      "title": "Generator Version",
+      "type": "string"
+    },
+    "tool_versions": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Tool Versions",
+      "type": "object"
+    },
+    "input": {
+      "$ref": "#/$defs/Input"
+    },
+    "environments": {
+      "items": {
+        "$ref": "#/$defs/Environment"
+      },
+      "minItems": 1,
+      "title": "Environments",
+      "type": "array"
+    },
+    "packages": {
+      "items": {
+        "$ref": "#/$defs/Package"
+      },
+      "title": "Packages",
+      "type": "array"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/Artifact"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "resolutions": {
+      "items": {
+        "$ref": "#/$defs/Resolution"
+      },
+      "minItems": 1,
+      "title": "Resolutions",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/Warning"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "verification": {
+      "$ref": "#/$defs/Verification"
+    }
+  },
+  "required": [
+    "ecosystem",
+    "input",
+    "environments",
+    "resolutions",
+    "verification"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

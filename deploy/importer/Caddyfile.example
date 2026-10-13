@@ -1,0 +1,7 @@
+packferry.example.internal {
+    tls /etc/caddy/certs/packferry.crt /etc/caddy/certs/packferry.key
+    request_body {
+        max_size 5GB
+    }
+    reverse_proxy 127.0.0.1:8000
+}

@@ -1,0 +1,36 @@
+name: checks
+on: [push, pull_request]
+jobs:
+  python:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.29'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.4.0'
+      - run: npm install --global npm@11.17.0
+      - run: uv sync --locked
+      - run: uv run pytest
+      - run: uv run ruff check apps packages clients tests
+  frontend:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        app: [exporter, importer]
+    defaults:
+      run:
+        working-directory: frontend/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.4.0'
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build

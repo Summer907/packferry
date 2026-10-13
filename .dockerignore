@@ -1,0 +1,15 @@
+.git
+.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+build
+dist/*
+frontend/exporter/dist
+!frontend/importer/dist
+!frontend/importer/dist/**
+deploy/importer/*.tar.gz
+deploy/importer/*.sha256
+deploy/importer/data
+deploy/importer/.env
+tests
