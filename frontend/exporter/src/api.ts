@@ -19,6 +19,11 @@ export type ExportRequest = {
 export type ExportTask = {
   id: string
   status: string
+  created_at?: string
+  updated_at?: string
+  request?: ExportRequest
+  rerun_of?: string
+  progress?: import('../../shared/ui').Progress | null
   manifest?: Record<string, unknown>
   error?: { code: string; message: string; retryable: boolean }
 }
@@ -28,7 +33,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = payload.error
-    throw new Error(error?.message || `请求失败（HTTP ${response.status}）`)
+    throw new Error(error?.code ? `${error.message || '操作未完成，请检查输入'}（${error.code}）` : `请求失败（HTTP ${response.status}），请刷新状态后重试。`)
   }
   return payload as T
 }
@@ -62,3 +67,10 @@ export function getExport(id: string): Promise<ExportTask> {
 export function downloadBundle(id: string): void {
   location.assign(`/api/v1/exports/${encodeURIComponent(id)}/bundle`)
 }
+export type Favorite = { id: string; name: string; environment: Environment }
+export function listExports(offset = 0, status = ''): Promise<{ items: ExportTask[]; total: number }> { return api(`/exports?limit=25&offset=${offset}&status=${encodeURIComponent(status)}`) }
+export function exportEvents(id: string, offset = 0): Promise<{ items: import('../../shared/ui').TaskEvent[]; total: number }> { return api(`/exports/${encodeURIComponent(id)}/events?offset=${offset}&limit=100`) }
+export function rerunExport(id: string): Promise<ExportTask> { return api(`/exports/${encodeURIComponent(id)}/rerun`, { method: 'POST' }) }
+export function favorites(): Promise<{ items: Favorite[] }> { return api('/favorites') }
+export function saveFavorite(id: string, name: string, environment: Environment): Promise<Favorite> { return api(`/favorites/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, environment }) }) }
+export function deleteFavorite(id: string): Promise<void> { return api(`/favorites/${encodeURIComponent(id)}`, { method: 'DELETE' }) }

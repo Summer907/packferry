@@ -51,6 +51,8 @@ class NpmAdapter:
         self.store, self.npm, self.registry = store, npm, registry
 
     def resolve(self, packages: list[str], project_path: Path | None, environments: list[Environment], production_only: bool = False, prefer_lock: bool = True) -> AdapterResult:
+        from .observation import observe
+        observe("resolving", "解析 npm 依赖树与收集原始 tarball")
         result = AdapterResult()
         with tempfile.TemporaryDirectory(prefix="packferry-npm-") as temporary:
             workspace = Path(temporary)

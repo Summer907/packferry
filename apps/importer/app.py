@@ -567,7 +567,7 @@ def create_app(settings: Settings | None = None, nexus_client_factory: Callable[
             return {"operation": record.operation, "task": _task_dict(db.get(Task, record.task_id))}
 
     @app.get("/api/v1/imports")
-    def list_imports(request: Request, limit: int = 50, offset: int = 0):
+    def list_imports(request: Request, limit: int = 50, offset: int = 0, status: str | None = None):
         owner = runtime.principal(request)
         limit = min(max(limit, 1), 100)
         offset = max(offset, 0)
@@ -577,13 +577,33 @@ def create_app(settings: Settings | None = None, nexus_client_factory: Callable[
             if owner not in settings.maintainers:
                 query = query.where(Task.owner == owner)
                 count_query = count_query.where(Task.owner == owner)
+            if status:
+                query = query.where(Task.status == status)
+                count_query = count_query.where(Task.status == status)
             rows = db.scalars(query.order_by(Task.created_at.desc()).offset(offset).limit(limit)).all()
             return {"items": [_task_dict(t) for t in rows], "total": db.scalar(count_query) or 0}
 
     @app.get("/api/v1/imports/{task_id}")
     def detail(request: Request, task_id: str):
         _, task = owned(request, task_id)
-        return _task_dict(task)
+        with runtime.sessions() as db:
+            counts = dict(db.execute(select(TaskFile.status, func.count(TaskFile.id)).where(TaskFile.task_id == task_id).group_by(TaskFile.status)).all())
+            active = db.scalar(select(TaskFile).where(TaskFile.task_id == task_id, TaskFile.status.in_(['CHECKING', 'UPLOADING', 'VERIFYING'])).order_by(TaskFile.id).limit(1))
+            total = sum(counts.values())
+            completed = sum(counts.get(key, 0) for key in ['UPLOADED', 'SKIPPED', 'FAILED', 'CONFLICT', 'UNKNOWN'])
+            stage = {'READY': 'confirmation', 'QUEUED': 'queued', 'RUNNING': 'publishing', 'NEEDS_AUTH': 'needs_auth', 'INTERRUPTED': 'interrupted'}.get(task.status, 'completed')
+            return {**_task_dict(task), 'progress': {'stage': stage, 'operation': f"{ {'CHECKING': '检查远端', 'UPLOADING': '发布制品', 'VERIFYING': '核验远端内容'}[active.status]} · {active.filename}" if active else {'READY': '预检完成，等待用户确认', 'QUEUED': '等待后台执行', 'RUNNING': '逐文件发布与核验', 'NEEDS_AUTH': '需要原任务所有者重新授权', 'INTERRUPTED': '任务已中断，请先核实状态'}.get(task.status, '任务处理已结束，请核对逐文件结果'), 'completed': completed, 'total': total, 'updated_at': task.updated_at}, 'counts': counts}
+
+    @app.get("/api/v1/imports/{task_id}/events")
+    def task_events(request: Request, task_id: str, limit: int = 100, offset: int = 0):
+        owned(request, task_id)
+        limit, offset = min(max(limit, 1), 500), max(offset, 0)
+        with runtime.sessions() as db:
+            rows = db.scalars(select(Audit).where(Audit.task_id == task_id).order_by(Audit.id).offset(offset).limit(limit)).all()
+            # Only curated event names and artifact identities leave this diagnostic endpoint.
+            items = [{'id': row.id, 'event': row.event, 'artifact_id': json.loads(row.detail or '{}').get('artifact_id'), 'created_at': row.created_at} for row in rows]
+            total = db.scalar(select(func.count(Audit.id)).where(Audit.task_id == task_id)) or 0
+            return {'items': items, 'total': total}
 
     @app.get("/api/v1/imports/{task_id}/preview")
     def preview(request: Request, task_id: str):
@@ -592,12 +612,17 @@ def create_app(settings: Settings | None = None, nexus_client_factory: Callable[
         return {"id": task.id, "status": task.status, "repository": task.repository, "ecosystem": task.ecosystem, "package_count": len(manifest["packages"]), "artifact_count": len(manifest["artifacts"]), "warnings": manifest["warnings"], "verification": manifest["verification"]}
 
     @app.get("/api/v1/imports/{task_id}/files")
-    def files(request: Request, task_id: str, limit: int = 100, offset: int = 0):
+    def files(request: Request, task_id: str, limit: int = 100, offset: int = 0, status: str | None = None):
         owned(request, task_id)
         limit, offset = min(max(limit, 1), 500), max(offset, 0)
         with runtime.sessions() as db:
-            rows = db.scalars(select(TaskFile).where(TaskFile.task_id == task_id).order_by(TaskFile.id).offset(offset).limit(limit)).all()
-            total = db.scalar(select(func.count(TaskFile.id)).where(TaskFile.task_id == task_id)) or 0
+            query = select(TaskFile).where(TaskFile.task_id == task_id)
+            count_query = select(func.count(TaskFile.id)).where(TaskFile.task_id == task_id)
+            if status:
+                query = query.where(TaskFile.status == status)
+                count_query = count_query.where(TaskFile.status == status)
+            rows = db.scalars(query.order_by(TaskFile.id).offset(offset).limit(limit)).all()
+            total = db.scalar(count_query) or 0
             return {"items": [{"artifact_id": r.artifact_id, "filename": r.filename, "status": r.status, "error": r.error} for r in rows], "total": total}
 
     @app.post("/api/v1/imports/{task_id}/confirm")

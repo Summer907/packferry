@@ -258,6 +258,8 @@ class PythonAdapter:
         packages_by_id: dict[str, Package] = {}
         artifacts_by_digest: dict[str, Artifact] = {}
         for environment in environments:
+            from .observation import observe
+            observe("resolving", f"解析与收集目标环境：{environment.environment_id}")
             check_cancelled()
             environment_id = environment.environment_id
             resolution = Resolution(environment_id=environment_id, status="COMPLETE")
@@ -417,6 +419,8 @@ class PythonAdapter:
         return pinned
 
     def _download_wheel(self, name: str, version: str, environment: Environment) -> Path:
+        from .observation import observe
+        observe("resolving", f"收集 wheel：{name} {version} · {environment.environment_id}")
         directory = Path(tempfile.mkdtemp(prefix="packferry-wheel-"))
         command = [self.python, "-m", "pip", "download", f"{name}=={version}", "--no-deps", "--only-binary=:all:", "--implementation", "cp", "--python-version", environment.version, "--abi", environment.abi, "--dest", str(directory)]
         for platform in _pip_platforms(environment):

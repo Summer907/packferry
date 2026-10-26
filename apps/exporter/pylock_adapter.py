@@ -31,6 +31,8 @@ class PylockAdapter:
         packages: dict[str, Package] = {}
         artifacts: dict[str, Artifact] = {}
         for environment in environments:
+            from .observation import observe
+            observe("resolving", f"解析与收集目标环境：{environment.environment_id}")
             check_cancelled()
             resolution = Resolution(environment_id=environment.environment_id, status="COMPLETE")
             result.resolutions.append(resolution)

@@ -56,6 +56,11 @@ class ExportService:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = ArtifactStore(self.data_dir / "artifacts")
         self._cancel_event = threading.Event()
+        self.observer = None
+
+    def observe(self, stage: str, operation: str) -> None:
+        if self.observer:
+            self.observer(stage, operation)
 
     def cancel(self) -> None:
         from .adapters import cancel_active_subprocesses
@@ -66,16 +71,20 @@ class ExportService:
         from .adapters import bind_cancel_event, unbind_cancel_event
         if self._cancel_event.is_set():
             raise RuntimeError('Export was cancelled before it started')
+        from .observation import observer
+        observation_token = observer.set(self.observer)
         token = bind_cancel_event(self._cancel_event)
         try:
             return self._export_impl(request, output)
         finally:
             unbind_cancel_event(token)
+            observer.reset(observation_token)
 
     def _export_impl(self, request: ExportRequest, output: Path) -> Manifest:
         from .adapters import check_cancelled
         from packages.common.bundle import build_bundle
 
+        self.observe('preparing', '检查输入与工具版本')
         environments = request.environments or self._defaults(request.ecosystem)
         versions = self._tool_versions(request.ecosystem)
         cache_key = self._resolution_key(request, environments, versions)
@@ -84,6 +93,7 @@ class ExportService:
             if not snapshot.is_file():
                 raise ValueError("No matching historical resolution; run fresh first")
             manifest = Manifest.model_validate_json(snapshot.read_bytes())
+            self.observe('resolving', '复用历史解析并核对缓存制品')
             sources = {}
             for artifact in manifest.artifacts:
                 source = self.store.verify(artifact.sha256)
@@ -96,8 +106,10 @@ class ExportService:
                 "input": manifest.input.model_copy(update={"resolution_policy": "reuse"}),
             })
             check_cancelled()
+            self.observe('bundling', '生成 Bundle ZIP')
             build_bundle(manifest, sources, Path(output))
             return manifest
+        self.observe('resolving', '解析依赖与收集制品；可能交错执行')
         if request.ecosystem == "pypi":
             pylock = self._pylock_path(request.project_path, request.prefer_lock)
             if pylock:
@@ -112,6 +124,7 @@ class ExportService:
             constraints = request.constraints if request.constraints else self._npm_project_constraints(request.project_path)
             resolved = NpmAdapter(self.store).resolve(request.constraints, request.project_path, environments, request.production_only, request.prefer_lock)
         check_cancelled()
+        self.observe('checking', '汇总各环境解析与制品覆盖情况')
         statuses = [resolution.status for resolution in resolved.resolutions]
         resolution_status = "FAILED" if statuses and all(status == "FAILED" for status in statuses) else "PARTIAL" if any(status != "COMPLETE" for status in statuses) else "COMPLETE"
         covered_nodes = {node_id for artifact in resolved.artifacts for node_id in artifact.package_node_ids}
@@ -138,6 +151,7 @@ class ExportService:
             verification=Verification(resolution_status=resolution_status, collection_status=collection_status, offline_install_status="NOT_VERIFIED"),
         )
         check_cancelled()
+        self.observe('bundling', '生成 Bundle ZIP')
         build_bundle(manifest, resolved.sources, Path(output))
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix="resolution-", suffix=".json", dir=snapshot.parent)

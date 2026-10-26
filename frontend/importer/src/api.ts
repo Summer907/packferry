@@ -8,6 +8,8 @@ export type Task = {
   ecosystem: string
   created_at: string
   updated_at: string
+  progress?: import('../../shared/ui').Progress
+  counts?: Record<string, number>
   zip_sha256?: string
   error?: string | ApiError | null
 }
@@ -69,18 +71,36 @@ export async function me(): Promise<string> {
 }
 
 export function repositories(): Promise<Repository[]> { return request('/repositories') }
-export function tasks(): Promise<{ items: Task[]; total: number }> { return request('/imports') }
+export function tasks(offset = 0, status = ''): Promise<{ items: Task[]; total: number }> { return request(`/imports?limit=25&offset=${offset}&status=${encodeURIComponent(status)}`) }
 export function task(id: string): Promise<Task> { return request(`/imports/${encodeURIComponent(id)}`) }
 export function preview(id: string): Promise<Preview> { return request(`/imports/${encodeURIComponent(id)}/preview`) }
-export function files(id: string): Promise<TaskFiles> { return request(`/imports/${encodeURIComponent(id)}/files`) }
+export function files(id: string, offset = 0, status = ''): Promise<TaskFiles> { return request(`/imports/${encodeURIComponent(id)}/files?limit=100&offset=${offset}&status=${encodeURIComponent(status)}`) }
 export function report(id: string): Promise<Report> { return request(`/imports/${encodeURIComponent(id)}/report`) }
 export function operation(key: string): Promise<{ operation: string; task: Task }> { return request(`/operations/${encodeURIComponent(key)}`) }
 
-export async function upload(bundle: File, repository: string, key: string): Promise<Task> {
+export async function upload(bundle: File, repository: string, key: string, onProgress?: (percent: number | null) => void): Promise<Task> {
   const body = new FormData()
   body.set('bundle', bundle)
   body.set('repository', repository)
-  return request('/imports', { method: 'POST', headers: { 'Idempotency-Key': key }, body })
+  if (!onProgress) return request('/imports', { method: 'POST', headers: { 'Idempotency-Key': key }, body })
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/v1/imports')
+    xhr.withCredentials = true
+    xhr.setRequestHeader('Idempotency-Key', key)
+    if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken)
+    xhr.upload.onprogress = event => onProgress(event.lengthComputable && event.total > 0 ? Math.min(100, Math.floor(event.loaded / event.total * 100)) : null)
+    xhr.upload.onload = () => onProgress(100)
+    xhr.onerror = () => reject(new Error('连接中断，操作结果待核实。'))
+    xhr.onabort = () => reject(new Error('连接中断，操作结果待核实。'))
+    xhr.onload = () => {
+      let payload: Record<string, unknown>
+      try { payload = JSON.parse(xhr.responseText) } catch { reject(new Error('服务端响应不可读，操作结果待核实。')); return }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(payload as Task)
+      else reject(new HttpError(xhr.status, (payload.error || { code: 'HTTP_ERROR', message: `请求失败（HTTP ${xhr.status}）`, retryable: false }) as ApiError))
+    }
+    xhr.send(body)
+  })
 }
 
 export function confirm(id: string, key: string): Promise<Task> {
@@ -92,3 +112,5 @@ export function authorize(id: string, password: string): Promise<Task> {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }),
   })
 }
+
+export function taskEvents(id: string, offset = 0): Promise<{ items: import('../../shared/ui').TaskEvent[]; total: number }> { return request(`/imports/${encodeURIComponent(id)}/events?offset=${offset}&limit=100`) }

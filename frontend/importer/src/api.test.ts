@@ -62,3 +62,31 @@ describe('importer browser API', () => {
     expect(fetchMock.mock.calls.map(call => call[0])).toEqual(['/api/v1/operations/same-key', '/api/v1/operations/same-key'])
   })
 })
+
+describe('upload progress and recovery transport', () => {
+  it('uses byte events and preserves CSRF and idempotency on XMLHttpRequest', async () => {
+    vi.resetModules()
+    vi.stubGlobal('sessionStorage', sessionStorageMock)
+    storage.set('pf_csrf', 'upload-csrf')
+    let instance: FakeXHR
+    class FakeXHR {
+      upload: { onprogress?: (e: { lengthComputable: boolean; loaded: number; total: number }) => void; onload?: () => void } = {}
+      headers: Record<string,string> = {}; responseText = '{"id":"task-x","status":"READY"}'; status = 201; withCredentials = false
+      onload?: () => void
+      constructor() { instance = this }
+      open = vi.fn(); setRequestHeader(k: string,v: string) { this.headers[k] = v }; send = vi.fn()
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeXHR)
+    const api = await import('./api'), progress = vi.fn()
+    const result = api.upload(new File(['zip'],'bundle.zip'), 'npm-hosted', 'stable-key', progress)
+    instance!.upload.onprogress!({ lengthComputable: true, loaded: 25, total: 100 })
+    expect(progress).toHaveBeenLastCalledWith(25)
+    instance!.upload.onprogress!({ lengthComputable: false, loaded: 25, total: 0 })
+    expect(progress).toHaveBeenLastCalledWith(null)
+    instance!.upload.onload!()
+    expect(progress).toHaveBeenLastCalledWith(100)
+    instance!.onload!()
+    expect((await result).id).toBe('task-x')
+    expect(instance!.headers).toEqual({ 'Idempotency-Key': 'stable-key', 'X-CSRF-Token': 'upload-csrf' })
+  })
+})

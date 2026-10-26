@@ -15,7 +15,8 @@ const fakeTask = { id: 'task-1', status: 'READY', owner: 'operator', repository:
 
 describe('Importer workflow UI', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
+    sessionStorage.clear()
     vi.mocked(api.me).mockResolvedValue('operator')
     vi.mocked(api.repositories).mockResolvedValue([{ name: 'npm-hosted', ecosystem: 'npm' }])
     vi.mocked(api.tasks).mockResolvedValue({ items: [], total: 0 })
@@ -36,12 +37,12 @@ describe('Importer workflow UI', () => {
     await input.trigger('change')
     await wrapper.get('button.wide').trigger('click')
     await flushPromises()
-    expect(api.upload).toHaveBeenCalledWith(expect.any(File), 'npm-hosted', expect.any(String))
+    expect(api.upload).toHaveBeenCalledWith(expect.any(File), 'npm-hosted', expect.any(String), expect.any(Function))
     expect(wrapper.text()).toContain('预检摘要')
     await wrapper.get('.actions .primary').trigger('click')
     await flushPromises()
     expect(api.confirm).toHaveBeenCalledWith('task-1', expect.any(String))
-    expect(wrapper.text()).toContain('COMPLETED')
+    expect(wrapper.text()).toContain('已完成')
     wrapper.unmount()
   })
 
@@ -51,11 +52,48 @@ describe('Importer workflow UI', () => {
     vi.mocked(api.tasks).mockResolvedValueOnce({ items: [], total: 0 }).mockRejectedValueOnce(expired)
     const wrapper = mount(App)
     await flushPromises()
-    expect(wrapper.text()).toContain('Bundle 导入')
+    expect(wrapper.text()).toContain('新建导入')
     await vi.advanceTimersByTimeAsync(2000)
     await flushPromises()
     expect(api.clearLocalSession).toHaveBeenCalled()
     expect(wrapper.text()).toContain('登录内网中心')
     wrapper.unmount()
   })
+  it('blocks repeat uploads until an unknown operation result is reconciled', async () => {
+    vi.mocked(api.upload).mockRejectedValue(new api.HttpError(502, { code: 'GATEWAY', message: 'response lost', retryable: true }))
+    vi.mocked(api.operation).mockRejectedValue(new api.HttpError(404, { code: 'NOT_FOUND', message: 'not ready', retryable: false }))
+    const wrapper = mount(App); await flushPromises()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['zip'], 'bundle.zip')] })
+    await input.trigger('change'); await wrapper.get('button.wide').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('结果待核实')
+    expect(wrapper.get('button.wide').attributes('disabled')).toBeDefined()
+    const calls = vi.mocked(api.upload).mock.calls
+    expect(JSON.parse(sessionStorage.getItem('pf_pending_operation:operator')!).key).toBe(calls[0][2])
+    vi.mocked(api.operation).mockResolvedValue({ operation: 'upload', task: fakeTask })
+    vi.mocked(api.task).mockResolvedValue(fakeTask)
+    await wrapper.findAll('button').find(x => x.text() === '查询操作结果')!.trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('预检摘要')
+    expect(api.upload).toHaveBeenCalledTimes(1)
+    expect(sessionStorage.getItem('pf_pending_operation:operator')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('keeps the selected task when an older detail response arrives late', async () => {
+    const second = { ...fakeTask, id: 'task-2', repository: 'second-repo' }
+    vi.mocked(api.tasks).mockResolvedValue({ items: [fakeTask, second], total: 2 })
+    let resolveFirst!: (value: typeof fakeTask) => void
+    vi.mocked(api.task).mockImplementation(id => id === 'task-1' ? new Promise(resolve => { resolveFirst = resolve }) : Promise.resolve(second))
+    const wrapper = mount(App); await flushPromises()
+    const history = () => wrapper.findAll('.sidebar button').find(x => x.text().includes('最近任务'))!
+    await history().trigger('click'); await flushPromises()
+    await wrapper.findAll('.task-row')[0].trigger('click')
+    await history().trigger('click'); await flushPromises()
+    await wrapper.findAll('.task-row')[1].trigger('click'); await flushPromises()
+    resolveFirst(fakeTask); await flushPromises()
+    expect(wrapper.get('.task-title').text()).toContain('second-repo')
+    expect(wrapper.get('.task-title').text()).not.toContain('task-1')
+    wrapper.unmount()
+  })
+
 })

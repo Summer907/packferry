@@ -11,7 +11,7 @@ import threading
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -31,6 +31,11 @@ class ExportBody(BaseModel):
     resolution_policy: str = 'fresh'
     lock_policy: str = 'prefer'
     production_only: bool = False
+
+
+class FavoriteBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    environment: Environment
 
 
 class LocalTasks:
@@ -57,8 +62,15 @@ class LocalTasks:
         self.closed = False
         with self.connect() as connection:
             connection.execute('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, request TEXT NOT NULL, manifest TEXT, error TEXT, created_at TEXT NOT NULL)')
-            connection.execute("UPDATE tasks SET status='INTERRUPTED', error=? WHERE status IN ('QUEUED','RUNNING')",
-                               (json.dumps({'code': 'INTERRUPTED', 'message': 'Previous process stopped; rerun to reuse verified cache', 'retryable': True}),))
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(tasks)')}
+            for name, kind in [('progress', 'TEXT'), ('updated_at', 'TEXT'), ('rerun_of', 'TEXT')]:
+                if name not in columns:
+                    connection.execute(f'ALTER TABLE tasks ADD COLUMN {name} {kind}')
+            connection.execute('CREATE TABLE IF NOT EXISTS task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, stage TEXT NOT NULL, operation TEXT NOT NULL, created_at TEXT NOT NULL)')
+            connection.execute('CREATE INDEX IF NOT EXISTS events_task ON task_events(task_id,id)')
+            connection.execute('CREATE TABLE IF NOT EXISTS favorites (id TEXT PRIMARY KEY, name TEXT NOT NULL, environment TEXT NOT NULL)')
+            connection.execute("UPDATE tasks SET status='INTERRUPTED', error=?,updated_at=? WHERE status IN ('QUEUED','RUNNING')",
+                               (json.dumps({'code': 'INTERRUPTED', 'message': 'Previous process stopped; rerun to reuse verified cache', 'retryable': True}), datetime.now(timezone.utc).isoformat()))
 
     @contextmanager
     def connect(self):
@@ -77,15 +89,39 @@ class LocalTasks:
         if row is None:
             raise HTTPException(404, 'Task not found')
         result = dict(row)
-        for key in ['request', 'manifest', 'error']:
+        for key in ['request', 'manifest', 'error', 'progress']:
             result[key] = json.loads(result[key]) if result[key] else None
+        if result['progress'] and result['status'] in {'FAILED', 'INTERRUPTED'}:
+            result['progress']['operation'] = '任务已中断，请重新运行' if result['status'] == 'INTERRUPTED' else '导出失败，请检查配置'
         return result
+
+    def observe(self, task_id, stage, operation):
+        now = datetime.now(timezone.utc).isoformat()
+        progress = {'stage': stage, 'operation': operation, 'completed': None, 'total': None, 'updated_at': now}
+        with self.connect() as connection:
+            if stage in {'failed', 'interrupted'}:
+                row = connection.execute('SELECT progress FROM tasks WHERE id=?', (task_id,)).fetchone()
+                previous = json.loads(row['progress']) if row and row['progress'] else None
+                if previous:
+                    progress['stage'] = previous['stage']
+            connection.execute('UPDATE tasks SET progress=?,updated_at=? WHERE id=?', (json.dumps(progress), now, task_id))
+            connection.execute('INSERT INTO task_events(task_id,stage,operation,created_at) VALUES(?,?,?,?)', (task_id, stage, operation, now))
+
+    def listing(self, limit, offset, status):
+        where, args = (' WHERE status=?', [status]) if status else ('', [])
+        with self.connect() as connection:
+            rows = connection.execute('SELECT id FROM tasks' + where + ' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?', [*args, limit, offset]).fetchall()
+            total = connection.execute('SELECT count(*) FROM tasks' + where, args).fetchone()[0]
+        items = [self.get(row['id']) for row in rows]
+        for item in items:
+            item.pop('manifest', None)
+        return {'items': items, 'total': total}
 
     def running(self):
         with self.connect() as connection:
             return connection.execute("SELECT count(*) FROM tasks WHERE status IN ('QUEUED','RUNNING')").fetchone()[0] > 0
 
-    def submit(self, request):
+    def submit(self, request, rerun_of=None):
         with self.lock:
             if self.closed:
                 raise HTTPException(503, 'Exporter is stopping')
@@ -93,6 +129,10 @@ class LocalTasks:
             with self.connect() as connection:
                 connection.execute('INSERT INTO tasks(id,status,request,created_at) VALUES(?,?,?,?)',
                                    (task_id, 'QUEUED', json.dumps(request.model_dump(mode='json')), datetime.now(timezone.utc).isoformat()))
+            if rerun_of:
+                with self.connect() as connection:
+                    connection.execute('UPDATE tasks SET rerun_of=? WHERE id=?', (rerun_of, task_id))
+            self.observe(task_id, 'queued', '等待执行')
             self.pool.submit(self._run, task_id, request)
         return self.get(task_id)
 
@@ -110,10 +150,13 @@ class LocalTasks:
             with self.connect() as connection:
                 connection.execute("UPDATE tasks SET status='RUNNING' WHERE id=?", (task_id,))
             output = self.root / 'bundles' / f'{task_id}.zip'
+            service.observer = lambda stage, operation: self.observe(task_id, stage, operation)
+            self.observe(task_id, 'preparing', '准备输入与运行工具')
             manifest = service.export(request, output)
             data = manifest.model_dump(mode='json')
             with self.connect() as connection:
                 connection.execute("UPDATE tasks SET status='COMPLETED',manifest=? WHERE id=?", (json.dumps(data), task_id))
+            self.observe(task_id, 'completed', 'Bundle 已生成，请核对完整性结果')
         except Exception as exc:
             # Third-party subprocess stderr can include source credentials: never expose it.
             code = getattr(exc, 'code', 'EXPORT_FAILED')
@@ -121,6 +164,7 @@ class LocalTasks:
                 status = 'INTERRUPTED' if self.closed else 'FAILED'
                 error = {'code': code, 'message': 'Export did not complete; inspect local diagnostics and retry', 'retryable': True}
                 connection.execute('UPDATE tasks SET status=?,error=? WHERE id=?', (status, json.dumps(error), task_id))
+            self.observe(task_id, status.lower(), '任务中断，请按原配置重新运行' if self.closed else '导出失败，请检查配置和诊断信息')
         finally:
             with self.lock:
                 self.active = None
@@ -134,7 +178,7 @@ class LocalTasks:
                 self.active.cancel()
         self.pool.shutdown(wait=True, cancel_futures=True)
         with self.connect() as connection:
-            connection.execute("UPDATE tasks SET status='INTERRUPTED' WHERE status IN ('QUEUED','RUNNING')")
+            connection.execute("UPDATE tasks SET status='INTERRUPTED',updated_at=? WHERE status IN ('QUEUED','RUNNING')", (datetime.now(timezone.utc).isoformat(),))
         if not self._instance_lock.closed:
             self._instance_lock.close()
 
@@ -209,6 +253,47 @@ def create_app(data_dir: Path | None = None, token: str | None = None, service_f
         request = ExportRequest.model_validate(body.model_dump())
         result = tasks.submit(request)
         return {'id': result['id'], 'status': result['status']}
+
+    @app.get('/api/v1/exports')
+    def listing(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0), status: str | None = None):
+        return tasks.listing(limit, offset, status)
+
+    @app.post('/api/v1/exports/{task_id}/rerun', status_code=202)
+    def rerun(task_id: str):
+        from .services import ExportRequest
+        original = tasks.get(task_id)
+        if original['status'] in {'QUEUED', 'RUNNING'}:
+            raise HTTPException(409, 'Task is still running')
+        return tasks.submit(ExportRequest.model_validate(original['request']), rerun_of=task_id)
+
+    @app.get('/api/v1/exports/{task_id}/events')
+    def events(task_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+        tasks.get(task_id)
+        with tasks.connect() as connection:
+            rows = connection.execute('SELECT * FROM task_events WHERE task_id=? ORDER BY id LIMIT ? OFFSET ?', (task_id, limit, offset)).fetchall()
+            total = connection.execute('SELECT count(*) FROM task_events WHERE task_id=?', (task_id,)).fetchone()[0]
+        return {'items': [dict(row) for row in rows], 'total': total}
+
+    @app.get('/api/v1/favorites')
+    def favorites():
+        with tasks.connect() as connection:
+            rows = connection.execute('SELECT * FROM favorites ORDER BY name,id').fetchall()
+        return {'items': [{**dict(row), 'environment': json.loads(row['environment'])} for row in rows]}
+
+    @app.put('/api/v1/favorites/{favorite_id}')
+    def save_favorite(favorite_id: str, body: FavoriteBody):
+        if len(favorite_id) > 128 or not body.name.strip():
+            raise HTTPException(422, 'Invalid favorite')
+        with tasks.connect() as connection:
+            connection.execute('INSERT INTO favorites(id,name,environment) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,environment=excluded.environment',
+                               (favorite_id, body.name.strip(), body.environment.model_dump_json()))
+        return {'id': favorite_id, **body.model_dump()}
+
+    @app.delete('/api/v1/favorites/{favorite_id}')
+    def delete_favorite(favorite_id: str):
+        with tasks.connect() as connection:
+            connection.execute('DELETE FROM favorites WHERE id=?', (favorite_id,))
+        return {'ok': True}
 
     @app.get('/api/v1/exports/{task_id}')
     def detail(task_id: str):
